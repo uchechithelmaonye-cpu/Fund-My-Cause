@@ -1,7 +1,6 @@
 /// Storage management and constants for the crowdfund contract.
 ///
 /// This module provides storage keys and helper utilities for managing contract state.
-
 use soroban_sdk::Symbol;
 
 /// Contract version for upgrades and compatibility tracking

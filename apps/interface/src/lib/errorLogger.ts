@@ -1,70 +1,90 @@
 import { ErrorInfo } from "react";
+import { AppError, ErrorSeverity, toAppError } from "@/lib/errors";
+
+// ── Structured log entry ──────────────────────────────────────────────────────
 
 export interface ErrorLog {
   timestamp: string;
   message: string;
+  code?: string;
+  severity: ErrorSeverity;
   stack?: string;
   componentStack?: string;
   url: string;
   userAgent: string;
 }
 
+// ── Core logging function ─────────────────────────────────────────────────────
+
 /**
- * Log errors to console and optionally to a remote service
+ * Logs any error, normalising it to an AppError first.
+ * Returns the structured log entry for further use (e.g. assertions in tests).
  */
-export function logError(error: Error, errorInfo?: ErrorInfo): ErrorLog {
-  const errorLog: ErrorLog = {
+export function logError(error: unknown, errorInfo?: ErrorInfo): ErrorLog {
+  const appError = error instanceof AppError ? error : toAppError(error);
+
+  const entry: ErrorLog = {
     timestamp: new Date().toISOString(),
-    message: error.message,
-    stack: error.stack,
-    componentStack: errorInfo?.componentStack,
+    message: appError.message,
+    code: appError.code,
+    severity: appError.severity,
+    stack: appError.stack,
+    componentStack: errorInfo?.componentStack ?? undefined,
     url: typeof window !== "undefined" ? window.location.href : "unknown",
-    userAgent: typeof navigator !== "undefined" ? navigator.userAgent : "unknown",
+    userAgent:
+      typeof navigator !== "undefined" ? navigator.userAgent : "unknown",
   };
 
-  // Log to console in development
   if (process.env.NODE_ENV === "development") {
-    console.error("Error logged:", errorLog);
+    const method =
+      appError.severity === "fatal" || appError.severity === "error"
+        ? "error"
+        : appError.severity === "warning"
+          ? "warn"
+          : "info";
+    console[method](
+      `[${appError.severity.toUpperCase()}] ${appError.code}:`,
+      appError.message,
+      appError.originalError ?? "",
+    );
   }
 
-  // Send to error tracking service (e.g., Sentry)
   if (process.env.NEXT_PUBLIC_ERROR_TRACKING_URL) {
-    sendErrorToService(errorLog);
+    sendErrorToService(entry);
   }
 
-  return errorLog;
+  return entry;
 }
 
-/**
- * Send error to remote tracking service
- */
-async function sendErrorToService(errorLog: ErrorLog): Promise<void> {
+// ── Remote reporting ──────────────────────────────────────────────────────────
+
+async function sendErrorToService(entry: ErrorLog): Promise<void> {
   try {
     await fetch(process.env.NEXT_PUBLIC_ERROR_TRACKING_URL!, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(errorLog),
+      body: JSON.stringify(entry),
     });
-  } catch (err) {
-    // Silently fail to avoid infinite error loops
+  } catch {
     if (process.env.NODE_ENV === "development") {
-      console.error("Failed to send error to tracking service:", err);
+      console.error("Failed to send error to tracking service");
     }
   }
 }
 
+// ── Global handler initialisation ─────────────────────────────────────────────
+
 /**
- * Initialize global error handler
+ * Attaches global unhandledrejection and error listeners.
+ * Call once from ErrorHandlerInitializer on the client.
  */
 export function initializeErrorHandler(): void {
   if (typeof window === "undefined") return;
 
-  // Handle unhandled promise rejections
   window.addEventListener("unhandledrejection", (event) => {
-    logError(new Error(event.reason));
+    logError(event.reason);
   });
 
-  // Set up error logger for error boundaries
   window.__errorLogger = (error: Error, errorInfo: ErrorInfo) => {
     logError(error, errorInfo);
   };

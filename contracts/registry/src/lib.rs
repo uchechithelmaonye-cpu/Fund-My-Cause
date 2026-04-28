@@ -75,7 +75,8 @@ impl RegistryContract {
         if !campaigns.contains(&campaign_id) {
             campaigns.push_back(campaign_id.clone());
             env.storage().instance().set(&KEY_CAMPAIGNS, &campaigns);
-            env.events().publish(("registry", "registered"), campaign_id);
+            env.events()
+                .publish(("registry", "registered"), campaign_id);
         }
     }
 

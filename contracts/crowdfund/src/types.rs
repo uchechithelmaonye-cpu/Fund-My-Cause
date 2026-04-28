@@ -2,7 +2,6 @@
 ///
 /// This module contains all `#[contracttype]` definitions including enums and structs
 /// used throughout the contract for state management and function signatures.
-
 use soroban_sdk::{contracttype, Address, String, Vec};
 
 /// Campaign status enumeration.
