@@ -53,3 +53,5 @@ pub const KEY_CATEGORY: Symbol = soroban_sdk::symbol_short!("CATEGORY");
 pub const KEY_VESTING: Symbol = soroban_sdk::symbol_short!("VESTING");
 /// Storage key for goal adjustment history
 pub const KEY_GOAL_HISTORY: Symbol = soroban_sdk::symbol_short!("GHIST");
+/// Storage key for metadata version history
+pub const KEY_META_HIST: Symbol = soroban_sdk::symbol_short!("METAHIST");

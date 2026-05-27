@@ -238,6 +238,8 @@ pub enum DataKey {
     TotalMatched,
     /// Penalty basis points
     PenaltyBps,
+    /// Metadata version history
+    MetadataHistory,
 }
 
 /// Recurring contribution plan.
@@ -599,4 +601,77 @@ pub struct EventInsuranceEnabled {
 pub struct EventInsurancePayout {
     pub contributor: Address,
     pub amount: i128,
+}
+
+// ── Issue #420 — Dynamic Goal Adjustment ─────────────────────────────────────
+
+/// Records a snapshot of campaign metadata at a specific version.
+///
+/// Created on initialization (version 0) and each time `update_metadata` is
+/// called.
+#[derive(Clone)]
+#[contracttype]
+pub struct MetadataVersion {
+    /// Sequential version number (0 = initial state from `initialize`)
+    pub version: u32,
+    /// Campaign title at this version
+    pub title: String,
+    /// Campaign description at this version
+    pub description: String,
+    /// Ledger timestamp when this snapshot was recorded
+    pub timestamp: u64,
+}
+
+/// Emitted when the campaign funding goal is adjusted by the creator.
+///
+/// Event topic: `("campaign", "goal_adjusted")`
+#[derive(Clone)]
+#[contracttype]
+pub struct EventGoalAdjusted {
+    /// Goal value before the adjustment
+    pub previous_goal: i128,
+    /// Goal value after the adjustment
+    pub new_goal: i128,
+    /// Ledger timestamp of the adjustment
+    pub timestamp: u64,
+}
+
+// ── Issue #421 — Contribution Limits Per User ─────────────────────────────────
+
+/// Emitted when the per-contributor maximum contribution limit is updated.
+///
+/// Event topic: `("campaign", "max_contribution_updated")`
+#[derive(Clone)]
+#[contracttype]
+pub struct EventMaxContributionUpdated {
+    /// New maximum contribution amount per contributor in stroops (0 = no limit)
+    pub max_contribution: i128,
+}
+
+// ── Issue #422 — Batch Refund Optimization ────────────────────────────────────
+
+/// Emitted after a `refund_batch` call completes.
+///
+/// Event topic: `("campaign", "batch_refund_completed")`
+#[derive(Clone)]
+#[contracttype]
+pub struct EventBatchRefundCompleted {
+    /// Number of contributors who received a refund in this batch
+    pub total_refunded: u32,
+    /// Number of addresses processed (capped at MAX_BATCH)
+    pub batch_size: u32,
+}
+
+// ── Issue #423 — Campaign Metadata Versioning ─────────────────────────────────
+
+/// Emitted when a new metadata version snapshot is stored.
+///
+/// Event topic: `("campaign", "metadata_versioned")`
+#[derive(Clone)]
+#[contracttype]
+pub struct EventMetadataVersioned {
+    /// New version number
+    pub version: u32,
+    /// Ledger timestamp when the snapshot was taken
+    pub timestamp: u64,
 }

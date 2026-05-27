@@ -57,8 +57,9 @@ mod validation;
 pub use errors::ContractError;
 pub use storage::{
     CONTRACT_VERSION, KEY_ADMIN, KEY_CATEGORY, KEY_CONTRIBS, KEY_CREATOR, KEY_DEADLINE, KEY_DESC,
-    KEY_GOAL, KEY_GOAL_HISTORY, KEY_INSURANCE, KEY_INSURANCE_POOL, KEY_MAX, KEY_MIN, KEY_PLATFORM,
-    KEY_RATE_LIMIT, KEY_SOCIAL, KEY_STATUS, KEY_TITLE, KEY_TOKEN, KEY_TOTAL, KEY_VESTING,
+    KEY_GOAL, KEY_GOAL_HISTORY, KEY_INSURANCE, KEY_INSURANCE_POOL, KEY_MAX, KEY_META_HIST,
+    KEY_MIN, KEY_PLATFORM, KEY_RATE_LIMIT, KEY_SOCIAL, KEY_STATUS, KEY_TITLE, KEY_TOKEN,
+    KEY_TOTAL, KEY_VESTING,
 };
 pub use types::{
     CampaignInfo,
@@ -69,6 +70,8 @@ pub use types::{
     Delegation,
     EventBlacklistRemoved,
     EventBlacklisted,
+    // Issue #422
+    EventBatchRefundCompleted,
     EventContributed,
     EventDeadlineExtended,
     EventDelegatedContribution,
@@ -79,11 +82,17 @@ pub use types::{
     EventExtensionExecuted,
     EventExtensionProposed,
     EventExtensionVoted,
+    // Issue #420
+    EventGoalAdjusted,
     // Event payload types
     EventInitialized,
     EventInsuranceEnabled,
     EventInsurancePayout,
+    // Issue #421
+    EventMaxContributionUpdated,
     EventMetadataUpdated,
+    // Issue #423
+    EventMetadataVersioned,
     EventPartialRefund,
     EventRateLimitUpdated,
     EventRecurringCancelled,
@@ -99,6 +108,8 @@ pub use types::{
     GoalAdjustment,
     InsuranceConfig,
     MatchingConfig,
+    // Issue #423
+    MetadataVersion,
     PlatformConfig,
     RecurringPlan,
     Status,
@@ -242,6 +253,16 @@ impl CrowdfundContract {
             timestamp: env.ledger().timestamp(),
         });
         env.storage().persistent().set(&KEY_GOAL_HISTORY, &history);
+
+        // Seed metadata version history with version 0 (initial state)
+        let mut meta_hist: Vec<MetadataVersion> = Vec::new(&env);
+        meta_hist.push_back(MetadataVersion {
+            version: 0,
+            title: title.clone(),
+            description: description.clone(),
+            timestamp: env.ledger().timestamp(),
+        });
+        env.storage().persistent().set(&KEY_META_HIST, &meta_hist);
 
         env.events().publish(
             ("campaign", "initialized"),
@@ -618,12 +639,24 @@ impl CrowdfundContract {
         let updated_description = description.is_some();
         let updated_social = social_links.is_some();
 
-        if let Some(ref t) = title {
+        // Validate and capture effective values for the version snapshot.
+        // Using `if let Some(ref ...)` borrows without moving, letting us clone
+        // here and then move the Option into the storage writes below.
+        let effective_title: String = if let Some(ref t) = title {
             validate_string_length(t, 64)?;
-        }
-        if let Some(ref d) = description {
+            t.clone()
+        } else {
+            inst.get(&KEY_TITLE)
+                .unwrap_or_else(|| String::from_str(&env, ""))
+        };
+        let effective_desc: String = if let Some(ref d) = description {
             validate_string_length(d, 512)?;
-        }
+            d.clone()
+        } else {
+            inst.get(&KEY_DESC)
+                .unwrap_or_else(|| String::from_str(&env, ""))
+        };
+
         if let Some(t) = title {
             inst.set(&KEY_TITLE, &t);
         }
@@ -634,6 +667,25 @@ impl CrowdfundContract {
             inst.set(&KEY_SOCIAL, &l);
         }
 
+        // Issue #423 — store a versioned metadata snapshot
+        let now = env.ledger().timestamp();
+        let mut meta_hist: Vec<MetadataVersion> = env
+            .storage()
+            .persistent()
+            .get(&KEY_META_HIST)
+            .unwrap_or_else(|| Vec::new(&env));
+        let version = meta_hist.len();
+        meta_hist.push_back(MetadataVersion {
+            version,
+            title: effective_title,
+            description: effective_desc,
+            timestamp: now,
+        });
+        env.storage().persistent().set(&KEY_META_HIST, &meta_hist);
+        env.storage()
+            .persistent()
+            .extend_ttl(&KEY_META_HIST, 100, 100);
+
         env.events().publish(
             ("campaign", "metadata_updated"),
             EventMetadataUpdated {
@@ -641,6 +693,10 @@ impl CrowdfundContract {
                 updated_description,
                 updated_social_links: updated_social,
             },
+        );
+        env.events().publish(
+            ("campaign", "metadata_versioned"),
+            EventMetadataVersioned { version, timestamp: now },
         );
         Ok(())
     }
@@ -682,6 +738,75 @@ impl CrowdfundContract {
             EventDeadlineExtended {
                 old_deadline,
                 new_deadline,
+            },
+        );
+        Ok(())
+    }
+
+    // ── Issue #420 — Dynamic Goal Adjustment ─────────────────────────────────
+
+    /// Adjusts the campaign funding goal mid-campaign.
+    ///
+    /// Allows the creator to raise or lower the goal while the campaign is
+    /// still active.  Every adjustment is appended to the persistent goal
+    /// history so the full audit trail is always available via
+    /// [`get_goal_history`](CrowdfundContract::get_goal_history).
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    /// * `new_goal` - New funding goal in stroops (must be > 0)
+    ///
+    /// # Returns
+    /// * `Ok(())` on success
+    /// * `Err(ContractError::NotActive)` if campaign is not in Active status
+    /// * `Err(ContractError::InvalidGoal)` if `new_goal` <= 0
+    /// * `Err(ContractError::GoalOverflow)` if `new_goal` is dangerously large
+    ///
+    /// # Side Effects
+    /// - Updates `KEY_GOAL` in instance storage
+    /// - Appends a [`GoalAdjustment`] entry to persistent `KEY_GOAL_HISTORY`
+    /// - Publishes `("campaign", "goal_adjusted")` event
+    pub fn adjust_goal(env: Env, new_goal: i128) -> Result<(), ContractError> {
+        let inst = env.storage().instance();
+        let status: Status = inst.get(&KEY_STATUS).unwrap();
+        if status != Status::Active {
+            return Err(ContractError::NotActive);
+        }
+        let creator: Address = inst.get(&KEY_CREATOR).unwrap();
+        creator.require_auth();
+
+        if new_goal <= 0 {
+            return Err(ContractError::InvalidGoal);
+        }
+        validate_goal_not_overflow(new_goal)?;
+
+        let previous_goal: i128 = inst.get(&KEY_GOAL).unwrap();
+        inst.set(&KEY_GOAL, &new_goal);
+
+        let now = env.ledger().timestamp();
+        let mut history: Vec<GoalAdjustment> = env
+            .storage()
+            .persistent()
+            .get(&KEY_GOAL_HISTORY)
+            .unwrap_or_else(|| Vec::new(&env));
+        history.push_back(GoalAdjustment {
+            previous_goal,
+            new_goal,
+            timestamp: now,
+        });
+        env.storage().persistent().set(&KEY_GOAL_HISTORY, &history);
+        env.storage()
+            .persistent()
+            .extend_ttl(&KEY_GOAL_HISTORY, 100, 100);
+
+        inst.extend_ttl(17280, 518400);
+
+        env.events().publish(
+            ("campaign", "goal_adjusted"),
+            EventGoalAdjusted {
+                previous_goal,
+                new_goal,
+                timestamp: now,
             },
         );
         Ok(())
@@ -842,6 +967,15 @@ impl CrowdfundContract {
             }
         }
 
+        // Issue #422: emit a single batch-level event summarising the run
+        env.events().publish(
+            ("campaign", "batch_refund_completed"),
+            EventBatchRefundCompleted {
+                total_refunded: refunded,
+                batch_size: limit,
+            },
+        );
+
         Ok(refunded)
     }
 
@@ -870,6 +1004,53 @@ impl CrowdfundContract {
             EventRateLimitUpdated {
                 max_amount_per_hour,
             },
+        );
+        Ok(())
+    }
+
+    // ── Issue #421 — Contribution Limits Per User ─────────────────────────────
+
+    /// Updates the per-contributor maximum contribution cap (creator only).
+    ///
+    /// Allows the creator to raise, lower, or disable the per-user contribution
+    /// cap after the campaign has been initialized.  Set `max_contribution` to
+    /// `0` to remove the cap entirely.
+    ///
+    /// The new limit must be either `0` (no limit) or `>= min_contribution`.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    /// * `max_contribution` - New cap in stroops (0 = unlimited)
+    ///
+    /// # Returns
+    /// * `Ok(())` on success
+    /// * `Err(ContractError::ExceedsMaximum)` if `max_contribution` is negative
+    ///   or non-zero but less than `min_contribution`
+    ///
+    /// # Side Effects
+    /// - Writes the new cap to `KEY_MAX` in instance storage
+    /// - Publishes `("campaign", "max_contribution_updated")` event
+    pub fn set_max_contribution(
+        env: Env,
+        max_contribution: i128,
+    ) -> Result<(), ContractError> {
+        let inst = env.storage().instance();
+        let creator: Address = inst.get(&KEY_CREATOR).unwrap();
+        creator.require_auth();
+
+        let min: i128 = inst.get(&KEY_MIN).unwrap_or(0);
+        if max_contribution < 0
+            || (max_contribution > 0 && max_contribution < min)
+        {
+            return Err(ContractError::ExceedsMaximum);
+        }
+
+        inst.set(&KEY_MAX, &max_contribution);
+        inst.extend_ttl(17280, 518400);
+
+        env.events().publish(
+            ("campaign", "max_contribution_updated"),
+            EventMaxContributionUpdated { max_contribution },
         );
         Ok(())
     }
@@ -2129,6 +2310,26 @@ impl CrowdfundContract {
         env.storage()
             .persistent()
             .get(&KEY_GOAL_HISTORY)
+            .unwrap_or_else(|| Vec::new(&env))
+    }
+
+    // ── Issue #423 — Campaign Metadata Versioning ─────────────────────────────
+
+    /// Returns the full metadata version history for this campaign.
+    ///
+    /// Version 0 is the initial metadata recorded at initialization.
+    /// Subsequent entries are created by every successful call to
+    /// [`update_metadata`](CrowdfundContract::update_metadata).
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    ///
+    /// # Returns
+    /// Vector of [`MetadataVersion`] entries in chronological order
+    pub fn get_metadata_history(env: Env) -> Vec<MetadataVersion> {
+        env.storage()
+            .persistent()
+            .get(&KEY_META_HIST)
             .unwrap_or_else(|| Vec::new(&env))
     }
 
