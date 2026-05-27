@@ -8,6 +8,9 @@ exclude = ["contracts/benchmarks"]
 [workspace.dependencies]
 soroban-sdk = "25.3.0"
 
+[workspace.dev-dependencies]
+insta = { version = "1.37", features = ["redaction"] }
+
 [profile.release]
 opt-level = "z"
 overflow-checks = true
