@@ -320,6 +320,18 @@ pub enum DataKey {
     EmergencyApproval(Address),
     /// Authorized approver addresses for emergency multi-sig
     EmergencyApproversList,
+    /// Reward configuration for the campaign
+    RewardConfig,
+    /// Total rewards distributed
+    TotalRewardsDistributed,
+    /// Rewards claimed by a specific contributor
+    RewardsClaimed(Address),
+    /// Search index entry for the campaign
+    SearchIndex,
+    /// Campaign title index for search
+    TitleIndex,
+    /// Campaign category index for filtering
+    CategoryIndex,
 }
 
 /// Recurring contribution plan.
@@ -900,4 +912,82 @@ pub struct EventContributionRecorded {
     pub amount: i128,
     pub timestamp: u64,
     pub running_total: i128,
+}
+
+/// Emitted when a campaign is cloned from an existing campaign.
+///
+/// Event topic: `("campaign", "cloned")`
+#[derive(Clone)]
+#[contracttype]
+pub struct EventCampaignCloned {
+    pub original_creator: Address,
+    pub new_creator: Address,
+    pub new_goal: i128,
+    pub new_deadline: u64,
+}
+
+/// Reward configuration for contributor incentives.
+///
+/// Defines how rewards are minted and distributed to contributors.
+#[derive(Clone)]
+#[contracttype]
+pub struct RewardConfig {
+    /// Token address for reward minting
+    pub reward_token: Address,
+    /// Reward amount per contribution unit (stroops)
+    pub reward_per_unit: i128,
+    /// Whether rewards are enabled
+    pub enabled: bool,
+}
+
+/// Search index entry for campaign discovery.
+///
+/// Stores searchable metadata for a campaign to enable efficient discovery.
+#[derive(Clone)]
+#[contracttype]
+pub struct SearchIndexEntry {
+    /// Campaign title (indexed)
+    pub title: String,
+    /// Campaign description (indexed)
+    pub description: String,
+    /// Campaign category
+    pub category: Category,
+    /// Campaign visibility
+    pub visibility: Visibility,
+    /// Creation timestamp
+    pub created_at: u64,
+    /// Current campaign status
+    pub status: Status,
+}
+
+/// Emitted when rewards are configured for a campaign.
+///
+/// Event topic: `("campaign", "rewards_configured")`
+#[derive(Clone)]
+#[contracttype]
+pub struct EventRewardsConfigured {
+    pub reward_token: Address,
+    pub reward_per_unit: i128,
+}
+
+/// Emitted when rewards are distributed to a contributor.
+///
+/// Event topic: `("campaign", "rewards_distributed")`
+#[derive(Clone)]
+#[contracttype]
+pub struct EventRewardsDistributed {
+    pub contributor: Address,
+    pub contribution_amount: i128,
+    pub reward_amount: i128,
+}
+
+/// Emitted when a campaign is indexed for search.
+///
+/// Event topic: `("campaign", "indexed")`
+#[derive(Clone)]
+#[contracttype]
+pub struct EventCampaignIndexed {
+    pub title: String,
+    pub category: Category,
+    pub visibility: Visibility,
 }

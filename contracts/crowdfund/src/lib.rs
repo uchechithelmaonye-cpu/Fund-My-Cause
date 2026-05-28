@@ -76,6 +76,8 @@ pub use types::{
     EventBlacklistRemoved,
     EventBlacklisted,
     // #416
+    EventCampaignCloned,
+    EventCampaignIndexed,
     EventCancelled,
     EventCategoryUpdated,
     EventContributed,
@@ -111,6 +113,8 @@ pub use types::{
     EventRefunded,
     // #417
     EventResumed,
+    EventRewardsConfigured,
+    EventRewardsDistributed,
     EventStatusChanged,
     EventTemplateApplied,
     EventTierAssigned,
@@ -130,7 +134,9 @@ pub use types::{
     RateLimit,
     RecurringPlan,
     // #418
+    RewardConfig,
     RewardTier,
+    SearchIndexEntry,
     Status,
     TemplateType,
     VestingSchedule,
@@ -294,6 +300,10 @@ impl CrowdfundContract {
                 deadline,
             },
         );
+
+        // Index campaign for search
+        Self::index_campaign(env)?;
+
         Ok(())
     }
 
@@ -819,6 +829,10 @@ impl CrowdfundContract {
             ("campaign", "metadata_versioned"),
             EventMetadataVersioned { version, timestamp: now },
         );
+
+        // Re-index campaign after metadata update
+        Self::index_campaign(env)?;
+
         Ok(())
     }
 
@@ -3473,6 +3487,324 @@ impl CrowdfundContract {
             EventInsurancePayout {
                 contributor,
                 amount: insurance_fee,
+            },
+        );
+        Ok(())
+    }
+
+    /// Configures reward distribution for the campaign.
+    ///
+    /// Sets up NFT or token rewards that contributors will receive based on their contributions.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    /// * `reward_token` - The token address for rewards
+    /// * `reward_per_unit` - Reward amount per contribution unit (stroops)
+    ///
+    /// # Returns
+    /// * `Ok(())` on success
+    /// * `Err(ContractError::NotCreator)` if caller is not the creator
+    pub fn configure_rewards(
+        env: Env,
+        reward_token: Address,
+        reward_per_unit: i128,
+    ) -> Result<(), ContractError> {
+        let inst = env.storage().instance();
+        let creator: Address = inst.get(&KEY_CREATOR).unwrap();
+        creator.require_auth();
+
+        validate_positive_amount(reward_per_unit)?;
+
+        let config = RewardConfig {
+            reward_token: reward_token.clone(),
+            reward_per_unit,
+            enabled: true,
+        };
+
+        inst.set(&DataKey::RewardConfig, &config);
+        inst.set(&DataKey::TotalRewardsDistributed, &0i128);
+
+        env.events().publish(
+            ("campaign", "rewards_configured"),
+            EventRewardsConfigured {
+                reward_token,
+                reward_per_unit,
+            },
+        );
+        Ok(())
+    }
+
+    /// Distributes rewards to a contributor based on their contribution.
+    ///
+    /// Mints and transfers reward tokens to the contributor proportional to their contribution.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    /// * `contributor` - The contributor's address
+    ///
+    /// # Returns
+    /// * `Ok(())` on success
+    /// * `Err(ContractError::NoRewardsConfigured)` if rewards not configured
+    pub fn distribute_rewards(env: Env, contributor: Address) -> Result<(), ContractError> {
+        let inst = env.storage().instance();
+        let reward_config: Option<RewardConfig> = inst.get(&DataKey::RewardConfig);
+
+        let config = reward_config.ok_or(ContractError::NoRewardsConfigured)?;
+        if !config.enabled {
+            return Err(ContractError::NoRewardsConfigured);
+        }
+
+        let contribution: i128 = env
+            .storage()
+            .persistent()
+            .get::<_, i128>(&DataKey::Contribution(contributor.clone()))
+            .unwrap_or(0);
+
+        if contribution == 0 {
+            return Err(ContractError::BelowMinimum);
+        }
+
+        let reward_amount = contribution
+            .checked_mul(config.reward_per_unit)
+            .ok_or(ContractError::Overflow)?
+            .checked_div(1_000_000)
+            .ok_or(ContractError::Overflow)?;
+
+        let already_claimed: i128 = env
+            .storage()
+            .persistent()
+            .get::<_, i128>(&DataKey::RewardsClaimed(contributor.clone()))
+            .unwrap_or(0);
+
+        if already_claimed > 0 {
+            return Ok(());
+        }
+
+        token::Client::new(&env, &config.reward_token).transfer(
+            &env.current_contract_address(),
+            &contributor,
+            &reward_amount,
+        );
+
+        let mut total: i128 = inst.get(&DataKey::TotalRewardsDistributed).unwrap_or(0);
+        total = total
+            .checked_add(reward_amount)
+            .ok_or(ContractError::Overflow)?;
+        inst.set(&DataKey::TotalRewardsDistributed, &total);
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::RewardsClaimed(contributor.clone()), &reward_amount);
+
+        env.events().publish(
+            ("campaign", "rewards_distributed"),
+            EventRewardsDistributed {
+                contributor,
+                contribution_amount: contribution,
+                reward_amount,
+            },
+        );
+        Ok(())
+    }
+
+    /// Creates or updates the search index for the campaign.
+    ///
+    /// Indexes campaign metadata for efficient discovery and filtering.
+    /// Called automatically on initialization and when metadata is updated.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    ///
+    /// # Returns
+    /// * `Ok(())` on success
+    pub fn index_campaign(env: Env) -> Result<(), ContractError> {
+        let inst = env.storage().instance();
+        let title: String = inst.get(&KEY_TITLE).unwrap();
+        let description: String = inst.get(&KEY_DESC).unwrap();
+        let category: Category = inst.get(&KEY_CATEGORY).unwrap();
+        let visibility: Visibility = inst.get(&KEY_VISIBILITY).unwrap_or(Visibility::Public);
+        let status: Status = inst.get(&KEY_STATUS).unwrap();
+
+        let index = SearchIndexEntry {
+            title: title.clone(),
+            description,
+            category,
+            visibility,
+            created_at: env.ledger().timestamp(),
+            status,
+        };
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::SearchIndex, &index);
+
+        env.events().publish(
+            ("campaign", "indexed"),
+            EventCampaignIndexed {
+                title,
+                category,
+                visibility,
+            },
+        );
+        Ok(())
+    }
+
+    /// Searches campaigns by category.
+    ///
+    /// Retrieves the search index entry filtered by category.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    /// * `category` - The category to filter by
+    ///
+    /// # Returns
+    /// * `Ok(Some(SearchIndexEntry))` if campaign matches category
+    /// * `Ok(None)` if campaign doesn't match category
+    pub fn search_by_category(
+        env: Env,
+        category: Category,
+    ) -> Result<Option<SearchIndexEntry>, ContractError> {
+        let index: Option<SearchIndexEntry> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::SearchIndex);
+
+        match index {
+            Some(entry) if entry.category == category => Ok(Some(entry)),
+            Some(_) => Ok(None),
+            None => Ok(None),
+        }
+    }
+
+    /// Searches campaigns by visibility.
+    ///
+    /// Retrieves the search index entry filtered by visibility level.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    /// * `visibility` - The visibility level to filter by
+    ///
+    /// # Returns
+    /// * `Ok(Some(SearchIndexEntry))` if campaign matches visibility
+    /// * `Ok(None)` if campaign doesn't match visibility
+    pub fn search_by_visibility(
+        env: Env,
+        visibility: Visibility,
+    ) -> Result<Option<SearchIndexEntry>, ContractError> {
+        let index: Option<SearchIndexEntry> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::SearchIndex);
+
+        match index {
+            Some(entry) if entry.visibility == visibility => Ok(Some(entry)),
+            Some(_) => Ok(None),
+            None => Ok(None),
+        }
+    }
+
+    /// Retrieves the full search index entry for the campaign.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    ///
+    /// # Returns
+    /// * `Ok(Some(SearchIndexEntry))` if index exists
+    /// * `Ok(None)` if index not yet created
+    pub fn get_search_index(env: Env) -> Result<Option<SearchIndexEntry>, ContractError> {
+        let index: Option<SearchIndexEntry> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::SearchIndex);
+        Ok(index)
+    }
+
+    /// Clones a campaign with new creator and deadline.
+    ///
+    /// Allows a creator to clone an existing campaign's metadata and settings
+    /// while resetting contribution data. The new campaign starts fresh with
+    /// zero contributions.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    /// * `new_creator` - The new campaign creator's address (must authorize)
+    /// * `new_goal` - The funding goal for the cloned campaign
+    /// * `new_deadline` - The deadline for the cloned campaign
+    ///
+    /// # Returns
+    /// * `Ok(())` on success
+    /// * `Err(ContractError::NotCreator)` if caller is not the original creator
+    /// * `Err(ContractError::InvalidGoal)` if new_goal <= 0
+    /// * `Err(ContractError::InvalidDeadline)` if new_deadline <= current time
+    pub fn clone_campaign(
+        env: Env,
+        new_creator: Address,
+        new_goal: i128,
+        new_deadline: u64,
+    ) -> Result<(), ContractError> {
+        let inst = env.storage().instance();
+        let creator: Address = inst.get(&KEY_CREATOR).unwrap();
+        creator.require_auth();
+
+        if new_goal <= 0 {
+            return Err(ContractError::InvalidGoal);
+        }
+        validate_goal_not_overflow(new_goal)?;
+        if new_deadline <= env.ledger().timestamp() {
+            return Err(ContractError::InvalidDeadline);
+        }
+
+        // Copy metadata from current campaign
+        let title: String = inst.get(&KEY_TITLE).unwrap();
+        let description: String = inst.get(&KEY_DESC).unwrap();
+        let token: Address = inst.get(&KEY_TOKEN).unwrap();
+        let min_contribution: i128 = inst.get(&KEY_MIN).unwrap();
+        let max_contribution: i128 = inst.get(&KEY_MAX).unwrap_or(0);
+        let category: Category = inst.get(&KEY_CATEGORY).unwrap();
+        let social_links: Option<Vec<String>> = inst.get(&KEY_SOCIAL);
+        let platform_config: Option<PlatformConfig> = inst.get(&KEY_PLATFORM);
+        let vesting: Option<VestingSchedule> = inst.get(&KEY_VESTING);
+
+        // Reset contribution data for new campaign
+        let empty: Vec<Address> = Vec::new(&env);
+        env.storage().persistent().set(&KEY_CONTRIBS, &empty);
+
+        // Reset instance storage for new campaign
+        inst.set(&KEY_ADMIN, &new_creator);
+        inst.set(&KEY_CREATOR, &new_creator);
+        inst.set(&KEY_GOAL, &new_goal);
+        inst.set(&KEY_DEADLINE, &new_deadline);
+        inst.set(&KEY_TOTAL, &0i128);
+        inst.set(&KEY_STATUS, &Status::Active);
+        inst.set(&DataKey::ContributorCount, &0u32);
+        inst.set(&DataKey::LargestContribution, &0i128);
+
+        // Reset goal history
+        let mut history: Vec<GoalAdjustment> = Vec::new(&env);
+        history.push_back(GoalAdjustment {
+            previous_goal: 0,
+            new_goal,
+            timestamp: env.ledger().timestamp(),
+        });
+        env.storage().persistent().set(&KEY_GOAL_HISTORY, &history);
+
+        // Reset metadata version history
+        let mut meta_hist: Vec<MetadataVersion> = Vec::new(&env);
+        meta_hist.push_back(MetadataVersion {
+            version: 0,
+            title: title.clone(),
+            description: description.clone(),
+            timestamp: env.ledger().timestamp(),
+        });
+        env.storage().persistent().set(&KEY_META_HIST, &meta_hist);
+
+        env.events().publish(
+            ("campaign", "cloned"),
+            EventCampaignCloned {
+                original_creator: creator,
+                new_creator,
+                new_goal,
+                new_deadline,
             },
         );
         Ok(())
