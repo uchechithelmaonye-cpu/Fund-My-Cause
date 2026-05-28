@@ -1,0 +1,54 @@
+use soroban_sdk::{testutils::{Address as _, Ledger}, token, Address, Env, String, Vec};
+
+use crowdfund::{Category, CrowdfundContract, CrowdfundContractClient, PlatformConfig};
+
+pub struct Campaign<'a> {
+    pub client: CrowdfundContractClient<'a>,
+    pub token: token::Client<'a>,
+    pub token_admin: token::StellarAssetClient<'a>,
+    pub token_id: Address,
+    pub contract_id: Address,
+    pub creator: Address,
+}
+
+pub fn setup<'a>(
+    env: &'a Env,
+    goal: i128,
+    deadline: u64,
+    platform_config: Option<PlatformConfig>,
+) -> Campaign<'a> {
+    let creator = Address::generate(env);
+    let token_admin_addr = Address::generate(env);
+    let token_id = env.register_stellar_asset_contract(token_admin_addr);
+    let contract_id = env.register_contract(None, CrowdfundContract);
+
+    let client = CrowdfundContractClient::new(env, &contract_id);
+    let token = token::Client::new(env, &token_id);
+    let token_admin = token::StellarAssetClient::new(env, &token_id);
+
+    client.initialize(
+        &creator,
+        &token_id,
+        &goal,
+        &deadline,
+        &100,
+        &0i128,
+        &String::from_str(env, "Test Campaign"),
+        &String::from_str(env, "Integration test"),
+        &None,
+        &platform_config,
+        &None,
+        &Category::Other,
+        &None,
+        &None,
+    );
+
+    Campaign {
+        client,
+        token,
+        token_admin,
+        token_id,
+        contract_id,
+        creator,
+    }
+}

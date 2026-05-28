@@ -7,58 +7,8 @@ use soroban_sdk::{
 
 use crowdfund::{Category, CrowdfundContract, CrowdfundContractClient, PlatformConfig};
 
-// ── shared setup ──────────────────────────────────────────────────────────────
-
-struct Campaign<'a> {
-    client: CrowdfundContractClient<'a>,
-    token: token::Client<'a>,
-    token_admin: token::StellarAssetClient<'a>,
-    token_id: Address,
-    contract_id: Address,
-    creator: Address,
-}
-
-fn setup<'a>(
-    env: &'a Env,
-    goal: i128,
-    deadline: u64,
-    platform_config: Option<PlatformConfig>,
-) -> Campaign<'a> {
-    let creator = Address::generate(env);
-    let token_admin_addr = Address::generate(env);
-    let token_id = env.register_stellar_asset_contract(token_admin_addr);
-    let contract_id = env.register_contract(None, CrowdfundContract);
-
-    let client = CrowdfundContractClient::new(env, &contract_id);
-    let token = token::Client::new(env, &token_id);
-    let token_admin = token::StellarAssetClient::new(env, &token_id);
-
-    client.initialize(
-        &creator,
-        &token_id,
-        &goal,
-        &deadline,
-        &100,
-        &0i128,
-        &String::from_str(env, "Test Campaign"),
-        &String::from_str(env, "Integration test"),
-        &None,
-        &platform_config,
-        &None,
-        &Category::Other,
-        &None,
-        &None,
-    );
-
-    Campaign {
-        client,
-        token,
-        token_admin,
-        token_id,
-        contract_id,
-        creator,
-    }
-}
+mod common;
+use common::{setup, Campaign};
 
 // ── full lifecycle: 5 contributors → deadline passes → creator withdraws ─────
 
