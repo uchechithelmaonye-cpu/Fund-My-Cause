@@ -1,15 +1,37 @@
 "use client";
 
 import React from "react";
+import { cn } from "@/lib/utils";
 
-// Shared shimmer block using design tokens
-function Block({ className }: { className: string }) {
+// ── Base primitive ────────────────────────────────────────────────────────────
+
+export function Skeleton({ className }: { className?: string }) {
   return (
     <div
-      className={className}
-      style={{ background: "var(--color-surface-elevated)" }}
+      className={cn("rounded skeleton-shimmer", className)}
+      aria-hidden="true"
     />
   );
+}
+
+// ── Fade-in wrapper (wraps content that replaces a skeleton) ──────────────────
+
+export function FadeIn({
+  children,
+  className,
+}: {
+  children: React.ReactNode;
+  className?: string;
+}) {
+  return (
+    <div className={cn("animate-fade-in-up", className)}>{children}</div>
+  );
+}
+
+// ── Internal shimmer block ────────────────────────────────────────────────────
+
+function Block({ className }: { className: string }) {
+  return <div className={cn("skeleton-shimmer", className)} />;
 }
 
 // ── Campaign card skeleton ────────────────────────────────────────────────────
@@ -17,7 +39,7 @@ function Block({ className }: { className: string }) {
 export function LoadingSkeleton() {
   return (
     <div
-      className="ds-card animate-pulse"
+      className="ds-card"
       aria-busy="true"
       aria-label="Loading campaign"
     >
@@ -54,7 +76,7 @@ export function LoadingSkeletonGrid({ count = 6 }: { count?: number }) {
 
 export function TableRowSkeleton({ cols = 4 }: { cols?: number }) {
   return (
-    <tr aria-busy="true" aria-label="Loading row" className="animate-pulse">
+    <tr aria-busy="true" aria-label="Loading row">
       {Array.from({ length: cols }).map((_, i) => (
         <td key={i} className="px-4 py-3">
           <Block className="h-4 rounded w-3/4" />
@@ -69,7 +91,7 @@ export function TableRowSkeleton({ cols = 4 }: { cols?: number }) {
 export function StatCardSkeleton() {
   return (
     <div
-      className="ds-card p-5 space-y-2 animate-pulse"
+      className="ds-card p-5 space-y-2"
       aria-busy="true"
       aria-label="Loading stat"
     >
@@ -85,7 +107,7 @@ export function StatCardSkeleton() {
 export function FormFieldSkeleton() {
   return (
     <div
-      className="space-y-1 animate-pulse"
+      className="space-y-1"
       aria-busy="true"
       aria-label="Loading field"
     >

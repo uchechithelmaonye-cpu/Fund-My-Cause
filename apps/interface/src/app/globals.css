@@ -162,6 +162,46 @@ body {
   animation: shimmer 1.5s infinite;
 }
 
+/* ── Skeleton shimmer ─────────────────────────────────────────────────────── */
+
+@keyframes skeleton-shimmer {
+  0%   { background-position: -800px 0; }
+  100% { background-position:  800px 0; }
+}
+
+.skeleton-shimmer {
+  background: linear-gradient(
+    90deg,
+    var(--color-surface-elevated) 0%,
+    var(--color-border-subtle) 50%,
+    var(--color-surface-elevated) 100%
+  );
+  background-size: 1600px 100%;
+  animation: skeleton-shimmer 1.8s ease-in-out infinite;
+}
+
+/* ── Fade-in transitions ──────────────────────────────────────────────────── */
+
+@keyframes fade-in-up {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.animate-fade-in {
+  animation: fade-in 0.3s ease forwards;
+}
+
+.animate-fade-in-up {
+  animation: fade-in-up 0.3s ease forwards;
+}
+
+/* ── Indeterminate progress ───────────────────────────────────────────────── */
+
+@keyframes indeterminate {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(400%); }
+}
+
 /* ── Modal animations ─────────────────────────────────────────────────────── */
 
 @keyframes fade-in {
