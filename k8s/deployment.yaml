@@ -1,0 +1,87 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fund-my-cause-frontend
+  namespace: fund-my-cause
+  labels:
+    app: fund-my-cause-frontend
+    version: v1
+spec:
+  replicas: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: fund-my-cause-frontend
+  template:
+    metadata:
+      labels:
+        app: fund-my-cause-frontend
+        version: v1
+    spec:
+      containers:
+      - name: frontend
+        image: fund-my-cause:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 3000
+          name: http
+        env:
+        - name: NEXT_PUBLIC_CONTRACT_ID
+          valueFrom:
+            configMapKeyRef:
+              name: fund-my-cause-config
+              key: contract_id
+        - name: NEXT_PUBLIC_RPC_URL
+          valueFrom:
+            configMapKeyRef:
+              name: fund-my-cause-config
+              key: rpc_url
+        - name: NEXT_PUBLIC_NETWORK_PASSPHRASE
+          valueFrom:
+            configMapKeyRef:
+              name: fund-my-cause-config
+              key: network_passphrase
+        - name: NEXT_PUBLIC_HORIZON_URL
+          valueFrom:
+            configMapKeyRef:
+              name: fund-my-cause-config
+              key: horizon_url
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 3000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 3000
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 2
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values:
+                  - fund-my-cause-frontend
+              topologyKey: kubernetes.io/hostname

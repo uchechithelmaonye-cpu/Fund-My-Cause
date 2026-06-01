@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: fund-my-cause-config
+  namespace: fund-my-cause
+data:
+  contract_id: "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4"
+  rpc_url: "https://soroban-testnet.stellar.org"
+  network_passphrase: "Test SDF Network ; September 2015"
+  horizon_url: "https://horizon-testnet.stellar.org"
