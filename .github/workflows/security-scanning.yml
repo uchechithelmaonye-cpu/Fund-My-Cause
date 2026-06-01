@@ -1,0 +1,168 @@
+name: Security Scanning
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+  schedule:
+    - cron: '0 2 * * *'  # Daily at 2 AM UTC
+
+jobs:
+  sast-scanning:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run Semgrep SAST
+        uses: returntocorp/semgrep-action@v1
+        with:
+          config: >-
+            p/security-audit
+            p/rust
+            p/typescript
+            p/dockerfile
+          generateSarif: true
+
+      - name: Upload SARIF to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: semgrep.sarif
+          category: semgrep
+
+  dependency-scanning:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run Cargo audit
+        uses: rustsec/audit-check-action@v1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run npm audit
+        run: |
+          cd apps/interface
+          npm audit --audit-level=moderate || true
+
+      - name: Generate dependency report
+        run: |
+          {
+            echo "## 📦 Dependency Scan Report"
+            echo ""
+            echo "### Rust Dependencies"
+            cargo tree --depth 1 2>/dev/null | head -20 || echo "No Rust dependencies"
+            echo ""
+            echo "### Node Dependencies"
+            cd apps/interface && npm list --depth=0 2>/dev/null | head -20 || echo "No Node dependencies"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  container-scanning:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: |
+          docker build -f apps/interface/Dockerfile -t fund-my-cause:scan .
+
+      - name: Run Trivy container scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: fund-my-cause:scan
+          format: sarif
+          output: trivy-results.sarif
+          severity: HIGH,CRITICAL
+
+      - name: Upload Trivy results
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: trivy-results.sarif
+          category: trivy
+
+  secret-scanning:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run TruffleHog secret scan
+        uses: trufflesecurity/trufflehog@main
+        with:
+          path: ./
+          base: ${{ github.event.repository.default_branch }}
+          head: HEAD
+          extra_args: --debug --only-verified
+
+  code-quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Run Clippy
+        run: |
+          cargo clippy --all-targets --all-features -- \
+            -W clippy::all \
+            -W clippy::pedantic \
+            -W clippy::security \
+            -D warnings
+
+      - name: Run rustfmt check
+        run: cargo fmt -- --check
+
+  sca-scanning:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run OWASP Dependency-Check
+        uses: dependency-check/Dependency-Check_Action@main
+        with:
+          path: '.'
+          format: 'SARIF'
+          args: >
+            --enableExperimental
+            --enableRetired
+
+      - name: Upload Dependency-Check results
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: dependency-check-report.sarif
+          category: dependency-check
+
+  summary:
+    runs-on: ubuntu-latest
+    needs: [sast-scanning, dependency-scanning, container-scanning, secret-scanning, code-quality, sca-scanning]
+    if: always()
+    steps:
+      - name: Generate security summary
+        run: |
+          {
+            echo "## 🔒 Security Scanning Summary"
+            echo ""
+            echo "### Scan Results"
+            echo "- SAST Scanning: ${{ needs.sast-scanning.result }}"
+            echo "- Dependency Scanning: ${{ needs.dependency-scanning.result }}"
+            echo "- Container Scanning: ${{ needs.container-scanning.result }}"
+            echo "- Secret Scanning: ${{ needs.secret-scanning.result }}"
+            echo "- Code Quality: ${{ needs.code-quality.result }}"
+            echo "- SCA Scanning: ${{ needs.sca-scanning.result }}"
+            echo ""
+            echo "All security scans completed. Review GitHub Security tab for details."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Fail if critical issues found
+        if: |
+          needs.sast-scanning.result == 'failure' ||
+          needs.container-scanning.result == 'failure' ||
+          needs.secret-scanning.result == 'failure' ||
+          needs.code-quality.result == 'failure'
+        run: exit 1
