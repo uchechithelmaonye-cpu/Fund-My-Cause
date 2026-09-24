@@ -2,6 +2,7 @@
 
 Shared access-control (RBAC) and error-handling primitives for the
 Fund-My-Cause Soroban contracts (`crowdfund`, `achievements`, `registry`).
+The `qf` (quadratic funding) contract is independent and does not use these primitives.
 Extracted per [Issue #834](https://github.com/Fund-My-Cause/Fund-My-Cause/issues/834).
 
 > **Module boundaries and adoption status:** see

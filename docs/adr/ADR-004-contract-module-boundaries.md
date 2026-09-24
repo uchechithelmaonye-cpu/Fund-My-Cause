@@ -1,4 +1,4 @@
-# ADR-004: Soroban contract module boundaries (`contracts/common` vs `crowdfund` / `registry` / `achievements`)
+# ADR-004: Soroban contract module boundaries (`contracts/common` vs `crowdfund` / `registry` / `achievements` / `qf`)
 
 - **Status:** Active
 - **Date:** 2026-07-25
@@ -27,6 +27,37 @@ Every symbol re-exported from `contracts/common/src/lib.rs`, and who references 
 | `find_team_member` | `rbac.rs` | **nobody** | — |
 | `check_permission` | `rbac.rs` | **nobody** | — |
 | `validate_permission` | `rbac.rs` | **nobody** | — |
+
+### Cross-contract invocation patterns
+
+**`qf` (Quadratic Funding) contract:**
+- **Status:** Standalone; does NOT depend on `contracts/common`
+- **Purpose:** Pure quadratic funding calculation engine with no state management
+- **Invocation pattern:** Read-only; called by `crowdfund` to calculate matching allocations for fund distribution
+- **Types shared:** None; `qf` exports immutable data types (`QFInput`, `QFResult`, `QFError`) as part of its public contract interface
+- **Why independent:** `qf` is a pure mathematical computation library without authorization requirements; no need for shared error handling or access control primitives
+
+**Invocation flow (`crowdfund` → `qf`):**
+```
+crowdfund::withdraw()
+  ├─ Load campaign state (raised, contributors)
+  ├─ Invoke qf::calculate(contributions, contributor_counts, matching_pool)
+  │  (cross-contract call via Soroban host function)
+  ├─ Receive QFResult { allocations, total_distributed }
+  └─ Distribute matching amounts to recipients
+```
+
+**Invocation flow (`registry` ↔ `crowdfund`):**
+```
+registry::register(campaign_id)
+  └─ Record campaign_id in registry storage (lookup index)
+
+frontend / indexer
+  ├─ Query registry::list_campaigns() to discover active campaigns
+  └─ Load campaign state via crowdfund::get_stats(campaign_id)
+```
+
+**No direct invocation:** `achievements` operates independently; there is no contract-to-contract call to it (contributions are recorded separately via on-chain events).
 
 Summarised: `achievements` is the only consumer, and it uses exactly two of the ten exported symbols. `crowdfund/Cargo.toml` and `registry/Cargo.toml` declare no `common` dependency at all. The whole of `rbac.rs` — six exported symbols, 256 lines — has zero references anywhere in the workspace.
 

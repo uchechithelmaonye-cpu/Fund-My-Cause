@@ -67,6 +67,24 @@ npm run dev
 Requires environment variables from `.env.example`.  Redis is optional; the
 service falls back to in-memory rate limiting when `REDIS_URL` is absent.
 
+## Schema Documentation
+
+The GraphQL API schema reference is published in `docs/api/graphql.md` and includes:
+
+- Authentication & authorization flow
+- Rate limiting limits and error codes
+- Query, mutation, and subscription definitions
+- Type definitions and scalars
+- Complete SDL (Schema Definition Language)
+
+To regenerate the schema documentation after modifying `src/schema.ts`:
+
+```bash
+npm run docs:generate
+```
+
+This will update `docs/api/graphql.md` with the current schema and is run as part of the release process.
+
 ## Testing
 
 ```bash
